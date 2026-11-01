@@ -9,7 +9,7 @@ PARAM KEY has twenty real buttons and a screen, and it has no device database of
 does the thinking, so it controls everything your HA already does: media, lights, climate, scenes,
 scripts. An IR blaster covers the gear HA can't reach.
 
-**[→ Join the beta list](FORM_LINK)** · [Demo video](VIDEO_LINK) · [Community thread](THREAD_LINK)
+**[→ Join the beta list](https://tally.so/r/Arzd60)**
 
 ## Why it's different
 
@@ -86,5 +86,5 @@ install it. `hardware/` is generated from the private hardware sources and repla
 
 ## Get one
 
-A small beta batch is coming. **[Join the list](FORM_LINK)**: it takes your email and two questions.
+A small beta batch is coming. **[Join the list](https://tally.so/r/Arzd60)**: it takes your email and two questions.
 Issues and Discussions here are open for ideas and feedback.
