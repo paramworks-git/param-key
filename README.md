@@ -1,4 +1,9 @@
-# PARAM KEY
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/param-key-logo-dark-256.png">
+    <img alt="PARAM KEY" src="docs/brand/param-key-logo-light-256.png" width="440">
+  </picture>
+</h1>
 
 **The physical remote for Home Assistant. If HA can control it, so can this.**
 
@@ -19,7 +24,7 @@ scripts. An IR blaster covers the gear HA can't reach.
   current room, the current mode.
 - **Local, no cloud.** It uses ESP-NOW to reach a bridge, which is any ~$10 ESP32 running ESPHome. The
   remote never joins your Wi-Fi.
-- **Weeks per charge.** It sleeps on the table and wakes when you pick it up. About 3 weeks on a
+- **Weeks per charge.** It sleeps on the table and wakes when you pick it up. 2–3 weeks on a
   1000 mAh cell, charged over USB-C.
 - **Learns IR.** It has an IR blaster plus an IR receiver, so it can copy codes from the remote it replaces.
 - **Yours to hack.** The ESPHome firmware and the HA integration are MIT.
