@@ -17,7 +17,7 @@ substitutions:
   name: param-key-bridge
   friendly_name: PARAM KEY bridge
   board: esp32dev
-  version: "0.2.0"
+  version: "0.3.0"
   # Where the param_key component comes from. Builds from a checkout of this
   # repository pass -s pk_component ../components (build.sh does).
   pk_component: github://paramworks-git/param-key@v${version}
@@ -79,6 +79,9 @@ update:
 api:
   encryption: {}
   actions:
+    # Screens, hotkeys and settings, cached for hellos, and messages. Each has a
+    # *_for twin taking a remote's MAC, for HA to give every remote its own screen;
+    # the plain one is for every remote (and replaces what each had of its own).
     - action: show_status
       variables:
         mode: string
@@ -88,8 +91,20 @@ api:
         value_label: string
       then:
         - lambda: |-
-            pk::bridge.screen = pk::text_packet('S', {mode, title, subtitle, to_string(value), value_label});
-            id(send_to_remotes).execute(0);
+            pk::bridge.set_ui("", pk::UI_SCREEN, pk::status_packet(mode, title, subtitle, value, value_label));
+            id(send_to_remotes).execute(pk::UI_SCREEN, "");
+    - action: show_status_for
+      variables:
+        remote: string
+        mode: string
+        title: string
+        subtitle: string
+        value: int
+        value_label: string
+      then:
+        - lambda: |-
+            if (pk::bridge.set_ui(remote, pk::UI_SCREEN, pk::status_packet(mode, title, subtitle, value, value_label)))
+              id(send_to_remotes).execute(pk::UI_SCREEN, remote);
     - action: show_list
       variables:
         mode: string
@@ -98,21 +113,34 @@ api:
         items: string[]
       then:
         - lambda: |-
-            std::vector<std::string> fields{mode, title, to_string(cursor)};
-            for (size_t i = 0; i < items.size() && i < 6; i++)
-              fields.push_back(items[i]);
-            pk::bridge.screen = pk::text_packet('L', fields);
-            id(send_to_remotes).execute(0);
+            pk::bridge.set_ui("", pk::UI_SCREEN, pk::list_packet(mode, title, cursor, items));
+            id(send_to_remotes).execute(pk::UI_SCREEN, "");
+    - action: show_list_for
+      variables:
+        remote: string
+        mode: string
+        title: string
+        cursor: int
+        items: string[]
+      then:
+        - lambda: |-
+            if (pk::bridge.set_ui(remote, pk::UI_SCREEN, pk::list_packet(mode, title, cursor, items)))
+              id(send_to_remotes).execute(pk::UI_SCREEN, remote);
     - action: set_hotkeys
       variables:
         labels: string[]
       then:
         - lambda: |-
-            std::vector<std::string> fields;
-            for (size_t i = 0; i < 4; i++)
-              fields.push_back(i < labels.size() ? labels[i] : "");
-            pk::bridge.hotkeys = pk::text_packet('B', fields);
-            id(send_to_remotes).execute(1);
+            pk::bridge.set_ui("", pk::UI_HOTKEYS, pk::hotkeys_packet(labels));
+            id(send_to_remotes).execute(pk::UI_HOTKEYS, "");
+    - action: set_hotkeys_for
+      variables:
+        remote: string
+        labels: string[]
+      then:
+        - lambda: |-
+            if (pk::bridge.set_ui(remote, pk::UI_HOTKEYS, pk::hotkeys_packet(labels)))
+              id(send_to_remotes).execute(pk::UI_HOTKEYS, remote);
     - action: set_config
       variables:
         brightness: int
@@ -120,21 +148,31 @@ api:
         sleep_seconds: int
       then:
         - lambda: |-
-            pk::bridge.config = pk::text_packet('C', {to_string(brightness), to_string(backlight_seconds),
-                                                        to_string(sleep_seconds)});
-            id(send_to_remotes).execute(2);
+            pk::bridge.set_ui("", pk::UI_CONFIG, pk::config_packet(brightness, backlight_seconds, sleep_seconds));
+            id(send_to_remotes).execute(pk::UI_CONFIG, "");
+    - action: set_config_for
+      variables:
+        remote: string
+        brightness: int
+        backlight_seconds: int
+        sleep_seconds: int
+      then:
+        - lambda: |-
+            if (pk::bridge.set_ui(remote, pk::UI_CONFIG, pk::config_packet(brightness, backlight_seconds, sleep_seconds)))
+              id(send_to_remotes).execute(pk::UI_CONFIG, remote);
     - action: show_message
       variables:
         message: string
         seconds: int
       then:
-        - lambda: |-
-            auto packet = pk::text_packet('M', {message, to_string(seconds)});
-            for (auto &r : pk::bridge.remotes) {
-              auto frame = r.heard ? pk::bridge.seal_for(r, packet) : std::vector<uint8_t>{};
-              if (!frame.empty())
-                id(espnow_radio).send(r.mac.data(), frame);
-            }
+        - script.execute: {id: send_message, remote: "", message: !lambda return message;, seconds: !lambda return seconds;}
+    - action: show_message_for
+      variables:
+        remote: string
+        message: string
+        seconds: int
+      then:
+        - script.execute: {id: send_message, remote: !lambda return remote;, message: !lambda return message;, seconds: !lambda return seconds;}
     # IR code for one remote to send (docs/protocol.md, packet I): carrier in Hz,
     # timings in microseconds, positive = carrier on. The remote must be awake.
     - action: send_ir
@@ -267,8 +305,9 @@ espnow:
             } else if (type == 'H' && n >= 5) {
               // Answer from the cache, so the screen is right at once, then
               // acknowledge (the remote's sign that the bridge has its key).
-              for (const auto *p : {&pk::bridge.screen, &pk::bridge.hotkeys, &pk::bridge.config}) {
-                auto frame = p->empty() ? std::vector<uint8_t>{} : pk::bridge.seal_for(*remote, *p);
+              for (int which : {pk::UI_SCREEN, pk::UI_HOTKEYS, pk::UI_CONFIG}) {
+                const auto &p = pk::bridge.ui_for(*remote, which);
+                auto frame = p.empty() ? std::vector<uint8_t>{} : pk::bridge.seal_for(*remote, p);
                 if (!frame.empty())
                   id(espnow_radio).send(info.src_addr, frame);
               }
@@ -328,23 +367,46 @@ interval:
                 if (id(ha_offline) || ++id(ha_down_seconds) < 5)
                   return;
                 id(ha_offline) = true;
-                pk::bridge.screen = pk::text_packet('S', {"Offline", "Home Assistant offline",
-                                                            "Keys work again once it's back", "-1", ""});
-                pk::bridge.hotkeys = pk::text_packet('B', {"", "", "", ""});
-                id(send_to_remotes).execute(0);
-                id(send_to_remotes).execute(1);
+                pk::bridge.set_ui("", pk::UI_SCREEN, pk::status_packet("Offline", "Home Assistant offline",
+                                                                       "Keys work again once it's back", -1, ""));
+                pk::bridge.set_ui("", pk::UI_HOTKEYS, pk::hotkeys_packet({}));
+                id(send_to_remotes).execute(pk::UI_SCREEN, "");
+                id(send_to_remotes).execute(pk::UI_HOTKEYS, "");
 
 script:
-  # which: 0 = screen packet, 1 = hotkey packet, 2 = config packet
+  # A cached UI packet (pk::Ui) to one remote (its MAC), or with "" to every remote:
+  # each gets its own if it has one.
   - id: send_to_remotes
     mode: queued
+    max_runs: 10
     parameters:
       which: int
+      remote: string
     then:
       - lambda: |-
-          const auto &packet = which == 0 ? pk::bridge.screen : which == 1 ? pk::bridge.hotkeys : pk::bridge.config;
           for (auto &r : pk::bridge.remotes) {
-            auto frame = r.heard ? pk::bridge.seal_for(r, packet) : std::vector<uint8_t>{};
+            if (!r.heard || (!remote.empty() && !pk::same_mac(r.mac.data(), remote)))
+              continue;
+            const auto &packet = pk::bridge.ui_for(r, which);
+            auto frame = packet.empty() ? std::vector<uint8_t>{} : pk::bridge.seal_for(r, packet);
+            if (!frame.empty())
+              id(espnow_radio).send(r.mac.data(), frame);
+          }
+  # A message overlay (not cached: a sleeping remote misses it).
+  - id: send_message
+    mode: queued
+    max_runs: 5
+    parameters:
+      remote: string
+      message: string
+      seconds: int
+    then:
+      - lambda: |-
+          auto packet = pk::text_packet('M', {message, to_string(seconds)});
+          for (auto &r : pk::bridge.remotes) {
+            if (!r.heard || (!remote.empty() && !pk::same_mac(r.mac.data(), remote)))
+              continue;
+            auto frame = pk::bridge.seal_for(r, packet);
             if (!frame.empty())
               id(espnow_radio).send(r.mac.data(), frame);
           }

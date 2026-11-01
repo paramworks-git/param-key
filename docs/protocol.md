@@ -66,7 +66,7 @@ HA picks which event a key reacts to:
 
 For long lists, HA sends only the visible window of items; the remote doesn't
 scroll on its own. The bridge caches the last `S` or `L` packet, the last `B`
-packet and the last `C` packet, to answer `H`. The remote keeps the settings from
+packet and the last `C` packet, for each remote (see the `*_for` actions), to answer `H`. The remote keeps the settings from
 `C` in flash, so they apply from the first frame after a wake.
 
 The remote sends an `I` code as soon as it arrives. The bridge never caches one: a
@@ -178,14 +178,18 @@ Actions the bridge exposes (called from HA as `esphome.<bridge_name>_<action>`):
 | `set_hotkeys` | `labels` (string list, up to 4) |
 | `show_message` | `message`, `seconds` (int) |
 | `set_config` | `brightness`, `backlight_seconds`, `sleep_seconds` (int) |
+| `show_status_for`, `show_list_for`, `set_hotkeys_for`, `set_config_for`, `show_message_for` | `remote` (MAC), then the same as above: for that remote only (bridge 0.3.0 and later) |
 | `send_ir` | `remote` (MAC), `carrier` (Hz), `timings` (int list, µs, positive = mark) |
 | `set_epoch` | `epoch` (1 to 16 777 215, higher than the bridge's current one): the bridge's send epoch, sent first each time HA connects |
 | `set_remote` | `remote` (MAC), `key` (32 hex digits), `floor` (the lowest counter to accept: one more than the last HA saw, 0 for a new pairing) |
 | `forget_remote` | `remote` |
 | `pair_reply` | `remote`, `remote_public` (from the pair request), `ha_public` (64 hex digits each) |
 
-The bridge sends each screen update to every paired remote it has heard from. A sleeping remote misses it, then gets the cached state
-on its next `H`.
+The plain screen actions go to every paired remote the bridge has heard from; the `*_for`
+twins go to one remote, and the bridge keeps that remote's own screen, hotkeys and settings
+(the integration uses them, so each remote has its own menu). A plain action replaces what each
+remote had of its own. A sleeping remote misses an update, then gets the cached state on its
+next `H`; messages aren't cached.
 
 ## Radio channel
 

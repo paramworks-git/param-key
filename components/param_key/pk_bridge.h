@@ -37,7 +37,13 @@ struct Remote {
   crypto::ReplayFloor rx;
   // Sent a valid frame since HA provisioned it: gets screen updates.
   bool heard{false};
+  // HA's screen (S or L), hotkey (B) and settings (C) packets for this remote alone
+  // (the *_for actions); empty = the shared one.
+  std::array<std::vector<uint8_t>, 3> ui{};
 };
+
+// Which UI packet: the screen, the hotkey bar, the settings.
+enum Ui : int { UI_SCREEN = 0, UI_HOTKEYS = 1, UI_CONFIG = 2 };
 
 // HA's half of a pairing exchange, sent when the remote next asks (it scans
 // channels, so it is only on ours now and then).
@@ -55,11 +61,31 @@ struct Bridge {
   std::vector<Remote> remotes;
   std::vector<PendingPair> pending;
   std::vector<std::pair<Mac, uint32_t>> pair_events;  // last pair-request event per remote
-  std::vector<uint8_t> screen;   // last S or L packet (plaintext)
-  std::vector<uint8_t> hotkeys;  // last B packet
-  std::vector<uint8_t> config;   // last C packet
+  // The last S or L, B and C packets for every remote (plaintext), answering hellos.
+  std::array<std::vector<uint8_t>, 3> ui{};
   uint8_t own_mac[6]{};
   crypto::EpochCounter tx;
+
+  // HA's packet for one remote (its MAC) or, with "", for all: that replaces any
+  // remote's own. False if the MAC isn't a paired remote.
+  bool set_ui(const std::string &remote, int which, std::vector<uint8_t> packet) {
+    if (remote.empty()) {
+      this->ui[which] = std::move(packet);
+      for (auto &r : this->remotes)
+        r.ui[which].clear();
+      return true;
+    }
+    uint8_t mac[6];
+    Remote *r = parse_mac(remote, mac) ? this->find(mac) : nullptr;
+    if (r == nullptr)
+      return false;
+    r->ui[which] = std::move(packet);
+    return true;
+  }
+
+  const std::vector<uint8_t> &ui_for(const Remote &r, int which) const {
+    return r.ui[which].empty() ? this->ui[which] : r.ui[which];
+  }
 
   Remote *find(const uint8_t *mac) {
     for (auto &r : this->remotes)

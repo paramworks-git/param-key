@@ -57,6 +57,34 @@ inline std::vector<uint8_t> text_packet(char type, const std::vector<std::string
   return packet;
 }
 
+// The bridge's UI packets (docs/protocol.md, "Bridge → remote"), from its HA actions.
+inline std::vector<uint8_t> status_packet(const std::string &mode, const std::string &title,
+                                          const std::string &subtitle, int value, const std::string &value_label) {
+  return text_packet('S', {mode, title, subtitle, std::to_string(value), value_label});
+}
+
+constexpr size_t LIST_ITEMS = 6;
+
+inline std::vector<uint8_t> list_packet(const std::string &mode, const std::string &title, int cursor,
+                                        const std::vector<std::string> &items) {
+  std::vector<std::string> fields{mode, title, std::to_string(cursor)};
+  for (size_t i = 0; i < items.size() && i < LIST_ITEMS; i++)
+    fields.push_back(items[i]);
+  return text_packet('L', fields);
+}
+
+inline std::vector<uint8_t> hotkeys_packet(const std::vector<std::string> &labels) {
+  std::vector<std::string> fields;
+  for (size_t i = 0; i < 4; i++)
+    fields.push_back(i < labels.size() ? labels[i] : "");
+  return text_packet('B', fields);
+}
+
+inline std::vector<uint8_t> config_packet(int brightness, int backlight_seconds, int sleep_seconds) {
+  return text_packet('C', {std::to_string(brightness), std::to_string(backlight_seconds),
+                           std::to_string(sleep_seconds)});
+}
+
 inline std::vector<std::string> split_fields(const uint8_t *data, size_t size) {
   std::vector<std::string> fields(1);
   for (size_t i = 3; i < size; i++) {
@@ -146,6 +174,12 @@ inline std::string format_mac(const uint8_t mac[6]) {
   char buf[18];
   snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
   return buf;
+}
+
+// A MAC given as text (any case) is this one.
+inline bool same_mac(const uint8_t mac[6], const std::string &text) {
+  uint8_t parsed[6];
+  return parse_mac(text, parsed) && memcmp(parsed, mac, 6) == 0;
 }
 
 }  // namespace pk

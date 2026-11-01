@@ -40,7 +40,7 @@ scripts. An IR blaster covers the gear HA can't reach.
 |---|---|
 | Remote v1 | In daily use |
 | Remote v2 | Boards in fab: fuel gauge, IR receiver, proper charge termination, sturdier case (FEA-checked). Its firmware follows the boards |
-| HACS integration ([param-key-homeassistant](https://github.com/paramworks-git/param-key-homeassistant)) | In progress: bridges, pairing and IR done; screens, menus and battery sensors next |
+| HACS integration ([param-key-homeassistant](https://github.com/paramworks-git/param-key-homeassistant)) | Bridges, pairing, IR, menus from labels, battery and settings. Next: a guided media setup |
 | IR learning | With v2: the receiver is on the board, the learning software comes next |
 | Room awareness | Next: one bridge per room, and the remote switches layout to the nearest one |
 
