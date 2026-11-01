@@ -1,0 +1,61 @@
+# Tag vX.Y.Z on main (matching `version` in firmware/bridge.yaml and
+# firmware/common/remote_core.yaml): builds every image from that tag, creates the GitHub
+# Release, and publishes the install page with the manifests that the browser installer and
+# the bridges' update entity in Home Assistant read.
+# Needs Settings -> Pages -> Source: GitHub Actions.
+name: Release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Tag matches the firmware version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: python3 .github/scripts/release.py check-version "$GITHUB_REF_NAME"
+
+  build:
+    needs: version
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    name: Release and install page
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write   # the GitHub Release
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          path: images
+          merge-multiple: true
+      - name: Install page and manifests
+        run: python3 .github/scripts/release.py site "$GITHUB_REF_NAME" images public
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --verify-tag --title "PARAM KEY $GITHUB_REF_NAME" \
+            --generate-notes images/*.factory.bin images/*.ota.bin
+      - uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d  # v6.0.0
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
+        with:
+          path: public
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346  # v5.0.1

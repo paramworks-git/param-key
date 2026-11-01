@@ -1,0 +1,263 @@
+# PARAM KEY, PCB v1 (hardware/pcb): ESP32-S3-MINI-1-N4R2, 2.0" 240x320
+# ST7789 panel (HS20HS072RX), 20 keys on their own GPIOs, LIS2DH12 accelerometer,
+# LiPo with TP4054 charger. Pin map: hardware/pcb/gen/design.py.
+#
+# Sleep: after the sleep timeout (sleep_timeout_ms until HA's Settings mode sets
+# one) the panel is powered off and the ESP32 enters deep sleep. Any key on
+# GPIO0-18 or the accelerometer (pick-up) wakes it.
+# The key that woke it is replayed as press/tap/release, so a quick tap still
+# counts even though boot takes a moment (only a single key, never on pick-up).
+#
+# Recovery: hold home (GPIO0) while pressing reset (or plugging in USB) for the
+# ROM bootloader.
+
+substitutions:
+  name: param-key-remote
+  sleep_timeout_ms: "30000"
+
+esphome:
+  name: ${name}
+  friendly_name: PARAM KEY
+  platformio_options:
+    board_build.flash_mode: qio
+  on_boot:
+    - priority: 800
+      then:
+        # Accelerometer: wake on motion, INT1 active low (see the hardware docs).
+        - lambda: |-
+            // Snapshot for the hello: ACC_INT before it's reconfigured shows what
+            // the wake pin saw while asleep (low = it held the ESP32 awake).
+            rtc_gpio_deinit(GPIO_NUM_21);
+            gpio_set_direction(GPIO_NUM_21, GPIO_MODE_INPUT);
+            uint8_t who = 0;
+            bool found = id(accel).read_byte(0x0F, &who) && who == 0x33;  // WHO_AM_I
+            pk::wake_diag = (found ? 1 : 0) | (gpio_get_level(GPIO_NUM_21) ? 2 : 0);
+            ESP_LOGI("param_key", "Accelerometer %s (0x%02X), ACC_INT %s", found ? "found" : "missing", who,
+                     gpio_get_level(GPIO_NUM_21) ? "high" : "low");
+            auto w = [](uint8_t reg, uint8_t val) { id(accel).write_byte(reg, val); };
+            w(0x20, 0x2F);  // CTRL_REG1: 10 Hz, low-power mode, XYZ on
+            w(0x21, 0x01);  // CTRL_REG2: high-pass filter on INT1 (ignore gravity)
+            w(0x22, 0x40);  // CTRL_REG3: IA1 interrupt on INT1
+            w(0x23, 0x00);  // CTRL_REG4: +-2 g
+            w(0x25, 0x02);  // CTRL_REG6: interrupts active low
+            w(0x32, 0x06);  // INT1_THS: ~100 mg
+            w(0x33, 0x00);  // INT1_DURATION
+            uint8_t dummy;
+            id(accel).read_byte(0x26, &dummy);  // REFERENCE: reset the filter
+            w(0x30, 0x2A);  // INT1_CFG: X/Y/Z high events, OR
+    - priority: -200
+      then:
+        # Replay the key that woke us if it was already released during boot.
+        # Only when exactly one key pin is in the wake mask: on picking up
+        # (accelerometer) the mask has also reported home, power, up and down,
+        # and replaying those taps turned the media center off.
+        - lambda: |-
+            if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1)
+              return;
+            uint64_t mask = esp_sleep_get_ext1_wakeup_status();
+            ESP_LOGI("param_key", "Woke on EXT1, mask 0x%llx", (unsigned long long) mask);
+            if ((mask & (1ULL << 21)) || __builtin_popcountll(mask) != 1)
+              return;
+            static const struct { int gpio; const char *key; } KEYS[] = {
+              {0, "home"}, {2, "power"}, {3, "ok"}, {4, "up"}, {5, "down"}, {6, "left"}, {7, "right"},
+              {8, "back"}, {9, "vol_up"}, {10, "vol_down"}, {11, "mute"}, {12, "play"}, {13, "rew"},
+              {14, "fwd"}, {15, "h1"}, {16, "h2"}, {17, "h3"}, {18, "h4"}};
+            for (auto &k : KEYS) {
+              if (!(mask & (1ULL << k.gpio)) || gpio_get_level((gpio_num_t) k.gpio) == 0)
+                continue;
+              uint32_t now = millis();
+              pk::keys.down(k.key, now);
+              pk::keys.up(k.key, now);
+            }
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: esp32s3
+  flash_size: 4MB
+  # 160 rather than 240 MHz: ~10 mA less while awake, screen redraws still quick.
+  cpu_frequency: 160MHZ
+  framework:
+    type: esp-idf
+
+psram:
+  mode: quad
+  speed: 80MHz
+
+logger:
+  hardware_uart: USB_SERIAL_JTAG
+
+packages:
+  core: !include common/remote_core.yaml
+  k_home: !include {file: common/key_gpio.yaml, vars: {key: home, pin: GPIO0, share: "true"}}
+  k_power: !include {file: common/key_gpio.yaml, vars: {key: power, pin: GPIO2, share: "true"}}
+  k_ok: !include {file: common/key_gpio.yaml, vars: {key: ok, pin: GPIO3, share: "true"}}
+  k_up: !include {file: common/key_gpio.yaml, vars: {key: up, pin: GPIO4, share: "true"}}
+  k_down: !include {file: common/key_gpio.yaml, vars: {key: down, pin: GPIO5, share: "true"}}
+  k_left: !include {file: common/key_gpio.yaml, vars: {key: left, pin: GPIO6, share: "true"}}
+  k_right: !include {file: common/key_gpio.yaml, vars: {key: right, pin: GPIO7, share: "true"}}
+  k_back: !include {file: common/key_gpio.yaml, vars: {key: back, pin: GPIO8, share: "true"}}
+  k_vol_up: !include {file: common/key_gpio.yaml, vars: {key: vol_up, pin: GPIO9, share: "true"}}
+  k_vol_down: !include {file: common/key_gpio.yaml, vars: {key: vol_down, pin: GPIO10, share: "true"}}
+  k_mute: !include {file: common/key_gpio.yaml, vars: {key: mute, pin: GPIO11, share: "true"}}
+  k_play: !include {file: common/key_gpio.yaml, vars: {key: play, pin: GPIO12, share: "true"}}
+  k_rew: !include {file: common/key_gpio.yaml, vars: {key: rew, pin: GPIO13, share: "true"}}
+  k_fwd: !include {file: common/key_gpio.yaml, vars: {key: fwd, pin: GPIO14, share: "true"}}
+  k_h1: !include {file: common/key_gpio.yaml, vars: {key: h1, pin: GPIO15, share: "true"}}
+  k_h2: !include {file: common/key_gpio.yaml, vars: {key: h2, pin: GPIO16, share: "true"}}
+  k_h3: !include {file: common/key_gpio.yaml, vars: {key: h3, pin: GPIO17, share: "true"}}
+  k_h4: !include {file: common/key_gpio.yaml, vars: {key: h4, pin: GPIO18, share: "true"}}
+  k_settings: !include {file: common/key_gpio.yaml, vars: {key: settings, pin: GPIO43, share: "false"}}
+  k_stop: !include {file: common/key_gpio.yaml, vars: {key: stop, pin: GPIO44, share: "false"}}
+
+i2c:
+  sda: GPIO39
+  scl: GPIO40
+  frequency: 400kHz
+
+i2c_device:
+  id: accel
+  address: 0x18
+
+spi:
+  clk_pin: GPIO33
+  mosi_pin: GPIO34
+
+display:
+  - platform: mipi_spi
+    id: pk_display
+    model: ST7789V
+    dimensions:
+      width: 240
+      height: 320
+    cs_pin: GPIO35
+    dc_pin: GPIO36
+    reset_pin: GPIO37
+    # Panel (and mic) supply switch, active low.
+    enable_pin:
+      number: GPIO38
+      inverted: true
+    # Check against the real panel: flip if colours come out inverted or swapped.
+    invert_colors: true
+    color_order: RGB
+    data_rate: 40MHz
+    auto_clear_enabled: false
+    update_interval: never
+
+output:
+  - platform: ledc
+    id: backlight_pwm
+    pin:
+      number: GPIO45
+      ignore_strapping_warning: true
+    frequency: 20kHz
+
+light:
+  - platform: monochromatic
+    id: backlight
+    output: backlight_pwm
+    restore_mode: ALWAYS_ON
+    default_transition_length: 0s
+    # The backlight runs from VBAT through 22 ohm: cap the duty cycle at full charge.
+    gamma_correct: 1.0
+
+# IR LED. Codes come from HA (packet I, docs/protocol.md) through pk_ir.
+remote_transmitter:
+  id: ir_tx
+  pin:
+    number: GPIO46
+    ignore_strapping_warning: true
+  carrier_duty_percent: 33%
+
+sensor:
+  - platform: adc
+    id: battery_voltage
+    pin: GPIO1
+    attenuation: 12db
+    # Average a burst per reading: single ADC samples wander a percent or two.
+    samples: 16
+    update_interval: 60s
+    filters:
+      - multiply: 2.0
+    on_value:
+      - component.update: battery_level
+  - platform: template
+    id: battery_level
+    unit_of_measurement: "%"
+    # Computed on each voltage reading, so a fresh wake reports within ~2 s.
+    update_interval: never
+    lambda: |-
+      float v = id(battery_voltage).state;
+      if (std::isnan(v)) return NAN;
+      return pk::battery_gauge.update(v, id(charging).state);
+
+binary_sensor:
+  - platform: gpio
+    id: charging
+    pin:
+      number: GPIO41
+      inverted: true
+      mode: input
+
+deep_sleep:
+  id: sleeper
+  esp32_ext1_wakeup:
+    mode: ANY_LOW
+    pins:
+      - {number: GPIO0, allow_other_uses: true}
+      - {number: GPIO2, allow_other_uses: true}
+      - {number: GPIO3, allow_other_uses: true}
+      - {number: GPIO4, allow_other_uses: true}
+      - {number: GPIO5, allow_other_uses: true}
+      - {number: GPIO6, allow_other_uses: true}
+      - {number: GPIO7, allow_other_uses: true}
+      - {number: GPIO8, allow_other_uses: true}
+      - {number: GPIO9, allow_other_uses: true}
+      - {number: GPIO10, allow_other_uses: true}
+      - {number: GPIO11, allow_other_uses: true}
+      - {number: GPIO12, allow_other_uses: true}
+      - {number: GPIO13, allow_other_uses: true}
+      - {number: GPIO14, allow_other_uses: true}
+      - {number: GPIO15, allow_other_uses: true}
+      - {number: GPIO16, allow_other_uses: true}
+      - {number: GPIO17, allow_other_uses: true}
+      - {number: GPIO18, allow_other_uses: true}
+      - GPIO21
+
+script:
+  - id: pk_ir
+    mode: queued
+    max_runs: 4
+    parameters:
+      carrier: int
+      timings: int[]
+    then:
+      - remote_transmitter.transmit_raw:
+          transmitter_id: ir_tx
+          carrier_frequency: !lambda return carrier;
+          code: !lambda return std::vector<int32_t>(timings.begin(), timings.end());
+  - id: pk_sleep
+    mode: single
+    then:
+      # Don't sleep while charging: USB power is free and the screen stays useful.
+      - if:
+          condition:
+            binary_sensor.is_off: charging
+          then:
+            - light.turn_off:
+                id: backlight
+                transition_length: 0s
+            # Set the RTC pad pulls for sleep explicitly. Left to their defaults,
+            # GPIO0/2/4/5 read low in deep sleep despite the 100k pull-ups (wake
+            # mask 0x35), so the remote woke a second after every sleep.
+            - lambda: |-
+                esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+                for (int gpio = 0; gpio <= 18; gpio++) {
+                  if (gpio == 1)  // VBAT_SENSE, not a key
+                    continue;
+                  rtc_gpio_pullup_en(static_cast<gpio_num_t>(gpio));
+                  rtc_gpio_pulldown_dis(static_cast<gpio_num_t>(gpio));
+                }
+                // ACC_INT is driven push-pull by the accelerometer.
+                rtc_gpio_pullup_dis(GPIO_NUM_21);
+                rtc_gpio_pulldown_dis(GPIO_NUM_21);
+            - deep_sleep.enter: sleeper

@@ -1,0 +1,390 @@
+# PARAM KEY: board-independent remote firmware.
+#
+# A board config includes this as a package and must provide:
+#   display:       id pk_display (portrait, 320 tall; layout scales with width)
+#   light:         id backlight
+#   sensor:        id battery_level (percent; publish NAN if unknown). Each publish
+#                  sends a hello, which is how HA logs the battery.
+#   binary_sensor: id charging (shown with battery_level in the top right)
+#   script:        id pk_sleep (called every second once idle for the sleep timeout)
+#   script:        id pk_ir, parameters carrier (int, Hz) and timings (int[], us,
+#                  positive = carrier on): send an IR code, or log that it can't
+#   keys:          binary sensors calling pk::keys.down/up (see key_*.yaml)
+#
+# The bridge, its channel and the link key come from pairing (pk_link.h in the
+# param_key component), so nothing about the bridge is compiled in.
+
+substitutions:
+  version: "0.2.0"
+  # Where the param_key component comes from. Builds from a checkout of this
+  # repository pass -s pk_component ../components (build.sh does).
+  pk_component: github://paramworks-git/param-key@v${version}
+  backlight_timeout_ms: "15000"
+  sleep_timeout_ms: "60000"
+
+external_components:
+  - source: ${pk_component}
+    components: [param_key]
+
+param_key:
+  role: remote
+
+esphome:
+  project:
+    name: paramworks.param-key-remote
+    version: ${version}
+  # A list, so it concatenates with a board's own on_boot list instead of being
+  # replaced by it when packages merge. Below -100 (espnow's LATE setup priority)
+  # so the radio is up before the hello goes out, and above a board's -200 key
+  # replay, which needs the sender.
+  on_boot:
+    - priority: -150
+      then:
+        - lambda: |-
+            auto &ui = pk::ui;
+            ui.mode = id(lbl_mode);
+            ui.hotkeys[0] = id(lbl_h1);
+            ui.hotkeys[1] = id(lbl_h2);
+            ui.hotkeys[2] = id(lbl_h3);
+            ui.hotkeys[3] = id(lbl_h4);
+            ui.msg_box = id(msg_box);
+            ui.msg = id(lbl_msg);
+            ui.status = id(status_view);
+            ui.title = id(lbl_title);
+            ui.subtitle = id(lbl_subtitle);
+            ui.bar = id(bar_value);
+            ui.value = id(lbl_value);
+            ui.list = id(list_view);
+            ui.list_title = id(lbl_list_title);
+            ui.rows[0] = id(row0);
+            ui.rows[1] = id(row1);
+            ui.rows[2] = id(row2);
+            ui.rows[3] = id(row3);
+            ui.rows[4] = id(row4);
+            ui.rows[5] = id(row5);
+            auto &link = pk::link;
+            link.firmware = "${version}";
+            link.send = [](const uint8_t *mac, const std::vector<uint8_t> &frame) {
+              if (!frame.empty())
+                id(espnow_radio).send(mac, frame);
+            };
+            link.add_peer = [](const uint8_t *mac) { id(espnow_radio).add_peer(mac); };
+            link.set_channel = [](uint8_t channel) { id(espnow_radio).set_channel_from_action(channel); };
+            link.begin(millis());
+            pk::keys.set_sender([](const std::vector<uint8_t> &packet) { pk::link.send_key(packet, millis()); });
+            pk::keys.last_activity = millis();
+        - light.turn_on:
+            id: backlight
+            brightness: !lambda return id(pk_brightness) / 100.0f;
+            transition_length: 0s
+        - script.execute: pk_hello
+
+# Screen settings from HA (C packet), kept in flash so they apply from the
+# first frame after a wake. The substitutions are the defaults until HA sends some.
+globals:
+  - id: pk_brightness
+    type: int
+    restore_value: true
+    initial_value: "100"
+  - id: pk_backlight_ms
+    type: uint32_t
+    restore_value: true
+    initial_value: "${backlight_timeout_ms}"
+  - id: pk_sleep_ms
+    type: uint32_t
+    restore_value: true
+    initial_value: "${sleep_timeout_ms}"
+
+espnow:
+  id: espnow_radio
+  # Until paired; then the bridge's channel, set at boot.
+  channel: 1
+  # Room for IR codes (ESP-NOW v2 frames).
+  max_payload_size: 1470
+  # The only peer is the paired bridge (and, while pairing, the one that answered).
+  auto_add_peer: false
+  # A pairing answer from a bridge that isn't a peer yet.
+  on_unknown_peer:
+    - then:
+        - lambda: |-
+            std::vector<uint8_t> plain;
+            pk::link.receive(info.src_addr, data, size, millis(), plain);
+  on_receive:
+    - then:
+        - lambda: |-
+            std::vector<uint8_t> plain;
+            if (!pk::link.receive(info.src_addr, data, size, millis(), plain))
+              return;
+            data = plain.data();
+            size = plain.size();
+            char type = static_cast<char>(data[2]);
+            if (type == 'I') {
+              uint32_t carrier;
+              std::vector<int32_t> timings;
+              if (pk::parse_ir(data, size, carrier, timings))
+                id(pk_ir).execute(static_cast<int>(carrier), std::vector<int>(timings.begin(), timings.end()));
+            } else if (type == 'C') {
+              auto f = pk::split_fields(data, size);
+              if (f.size() < 3)
+                return;
+              id(pk_brightness) = clamp(atoi(f[0].c_str()), 5, 100);
+              id(pk_backlight_ms) = 1000u * clamp(atoi(f[1].c_str()), 3, 600);
+              id(pk_sleep_ms) = 1000u * clamp(atoi(f[2].c_str()), 5, 3600);
+              if (id(backlight).remote_values.is_on()) {
+                auto call = id(backlight).turn_on();
+                call.set_brightness(id(pk_brightness) / 100.0f);
+                call.set_transition_length(0);
+                call.perform();
+              }
+            } else if (type != 'Y') {
+              pk::ui.handle(type, pk::split_fields(data, size), millis());
+            }
+
+# Report every battery reading to HA (the hello carries it), and keep the
+# battery indicator in the top right current.
+sensor:
+  - id: !extend battery_level
+    on_value:
+      - script.execute: pk_hello
+      - script.execute: pk_battery_ui
+
+binary_sensor:
+  - id: !extend charging
+    on_state:
+      - script.execute: pk_battery_ui
+
+script:
+  - id: pk_hello
+    then:
+      - lambda: |-
+          auto packet = pk::header('H');
+          float level = id(battery_level).state;
+          packet.push_back(std::isnan(level) ? 255 : static_cast<uint8_t>(clamp(level, 0.0f, 100.0f)));
+          // Flags: bit 0 charging, bit 1 wake diagnostics follow.
+          packet.push_back((id(charging).state ? 1 : 0) | 2);
+          packet.push_back(static_cast<uint8_t>(esp_sleep_get_wakeup_cause()));
+          uint32_t mask = static_cast<uint32_t>(esp_sleep_get_ext1_wakeup_status());
+          for (int i = 0; i < 4; i++)
+            packet.push_back(static_cast<uint8_t>(mask >> (8 * i)));
+          packet.push_back(pk::wake_diag);
+          const char *fw = "${version}";
+          packet.insert(packet.end(), fw, fw + strlen(fw));
+          pk::link.send_hello(packet);
+
+  - id: pk_battery_ui
+    then:
+      - lvgl.label.update:
+          id: lbl_batt
+          text_color: !lambda |-
+            float l = id(battery_level).state;
+            return lv_color_hex(!id(charging).state && !std::isnan(l) && l < 15 ? 0xF28B82 : 0xBDBDBD);
+          text: !lambda |-
+            float l = id(battery_level).state;
+            bool chg = id(charging).state;
+            const char *icon = chg ? LV_SYMBOL_CHARGE
+                : std::isnan(l) ? ""
+                : l >= 90 ? LV_SYMBOL_BATTERY_FULL
+                : l >= 65 ? LV_SYMBOL_BATTERY_3
+                : l >= 40 ? LV_SYMBOL_BATTERY_2
+                : l >= 15 ? LV_SYMBOL_BATTERY_1
+                : LV_SYMBOL_BATTERY_EMPTY;
+            if (std::isnan(l))
+              return std::string(icon);
+            return str_sprintf("%d%% %s", static_cast<int>(l), icon);
+
+  # Called on every key down: wake the screen.
+  - id: pk_wake
+    then:
+      - if:
+          condition:
+            light.is_off: backlight
+          then:
+            - light.turn_on:
+                id: backlight
+                brightness: !lambda return id(pk_brightness) / 100.0f;
+                transition_length: 0s
+
+interval:
+  - interval: 20ms
+    then:
+      - lambda: |-
+          uint32_t now = millis();
+          pk::keys.tick(now);
+          pk::ui.tick(now);
+          pk::link.tick(now, pk::keys.held_for("home", now), pk::keys.held_for("back", now));
+          if (pk::link.hello_due) {
+            pk::link.hello_due = false;
+            id(pk_hello).execute();
+          }
+  - interval: 1s
+    then:
+      - lambda: |-
+          // Awake with the screen on while pairing (it gives up after 5 minutes).
+          if (pk::keys.any_down() || pk::link.pairing)
+            return;
+          uint32_t idle = millis() - pk::keys.last_activity;
+          if (idle >= id(pk_sleep_ms))
+            id(pk_sleep).execute();
+          else if (idle >= id(pk_backlight_ms) && id(backlight).remote_values.is_on()) {
+            auto call = id(backlight).turn_off();
+            call.set_transition_length(500);
+            call.perform();
+          }
+
+lvgl:
+  displays:
+    - pk_display
+  bg_color: 0x000000
+  text_color: 0xFFFFFF
+  text_font: montserrat_14
+  style_definitions:
+    - id: hotkey_style
+      width: 24%
+      height: 30
+      y: 286
+      pad_top: 7
+      border_width: 1
+      border_color: 0x3A3A3A
+      radius: 6
+      text_align: CENTER
+      text_font: montserrat_12
+      text_color: 0xE0E0E0
+    - id: row_style
+      x: 2%
+      width: 96%
+      height: 32
+      pad_left: 8
+      pad_top: 7
+      radius: 6
+  top_layer:
+    widgets:
+      - label:
+          id: lbl_mode
+          x: 5%
+          y: 4
+          width: 64%
+          long_mode: DOT
+          text: "PARAM KEY"
+          text_font: montserrat_12
+          text_color: 0x8AB4F8
+      - label:
+          id: lbl_batt
+          align: TOP_RIGHT
+          x: -8
+          y: 4
+          text: ""
+          text_font: montserrat_12
+          text_color: 0xBDBDBD
+      - label:
+          id: lbl_h1
+          styles: hotkey_style
+          x: 1%
+          text: ""
+      - label:
+          id: lbl_h2
+          styles: hotkey_style
+          x: 26%
+          text: ""
+      - label:
+          id: lbl_h3
+          styles: hotkey_style
+          x: 51%
+          text: ""
+      - label:
+          id: lbl_h4
+          styles: hotkey_style
+          x: 76%
+          text: ""
+      - obj:
+          id: msg_box
+          hidden: true
+          align: CENTER
+          width: 88%
+          height: SIZE_CONTENT
+          bg_color: 0x202124
+          border_color: 0x8AB4F8
+          border_width: 1
+          radius: 10
+          widgets:
+            - label:
+                id: lbl_msg
+                align: CENTER
+                width: 90%
+                long_mode: WRAP
+                text_align: CENTER
+                # The top layer doesn't inherit the screen's text colour.
+                text_color: 0xFFFFFF
+                text: ""
+  widgets:
+    - obj:
+        id: status_view
+        x: 0
+        y: 22
+        width: 100%
+        height: 260
+        bg_opa: TRANSP
+        border_width: 0
+        pad_all: 0
+        scrollable: false
+        widgets:
+          - label:
+              id: lbl_title
+              x: 5%
+              y: 8
+              width: 90%
+              long_mode: WRAP
+              text_font: montserrat_20
+              text: "Waiting for bridge"
+          - label:
+              id: lbl_subtitle
+              x: 5%
+              y: 64
+              width: 90%
+              height: 110
+              long_mode: WRAP
+              text_font: montserrat_16
+              text_color: 0xBDBDBD
+              text: ""
+          - bar:
+              id: bar_value
+              hidden: true
+              x: 6%
+              y: 206
+              width: 88%
+              height: 10
+              min_value: 0
+              max_value: 100
+              value: 0
+          - label:
+              id: lbl_value
+              x: 6%
+              y: 224
+              width: 88%
+              text_align: CENTER
+              text: ""
+    - obj:
+        id: list_view
+        hidden: true
+        x: 0
+        y: 22
+        width: 100%
+        height: 260
+        bg_opa: TRANSP
+        border_width: 0
+        pad_all: 0
+        scrollable: false
+        widgets:
+          - label:
+              id: lbl_list_title
+              x: 5%
+              y: 2
+              width: 90%
+              long_mode: DOT
+              text_font: montserrat_16
+              text: ""
+          - label: {id: row0, styles: row_style, long_mode: DOT, y: 30, text: "", checked: {bg_color: 0x1A73E8, bg_opa: COVER}}
+          - label: {id: row1, styles: row_style, long_mode: DOT, y: 68, text: "", checked: {bg_color: 0x1A73E8, bg_opa: COVER}}
+          - label: {id: row2, styles: row_style, long_mode: DOT, y: 106, text: "", checked: {bg_color: 0x1A73E8, bg_opa: COVER}}
+          - label: {id: row3, styles: row_style, long_mode: DOT, y: 144, text: "", checked: {bg_color: 0x1A73E8, bg_opa: COVER}}
+          - label: {id: row4, styles: row_style, long_mode: DOT, y: 182, text: "", checked: {bg_color: 0x1A73E8, bg_opa: COVER}}
+          - label: {id: row5, styles: row_style, long_mode: DOT, y: 220, text: "", checked: {bg_color: 0x1A73E8, bg_opa: COVER}}

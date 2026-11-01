@@ -1,0 +1,4 @@
+# ESPHome build cache and your own credentials: never commit secrets.yaml
+.esphome/
+secrets.yaml
+__pycache__/

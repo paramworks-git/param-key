@@ -1,0 +1,18 @@
+# One remote key wired straight to a GPIO (PCB v1: external 100k pull-up, key to
+# GND). Include once per key with vars: key (protocol name), pin, share ("true"
+# if the pin is also a deep-sleep wake source).
+binary_sensor:
+  - platform: gpio
+    id: key_${key}
+    pin:
+      number: ${pin}
+      inverted: true
+      mode: input
+      allow_other_uses: ${share}
+    filters:
+      - delayed_on_off: 10ms
+    on_press:
+      - lambda: pk::keys.down("${key}", millis());
+      - script.execute: pk_wake
+    on_release:
+      - lambda: pk::keys.up("${key}", millis());

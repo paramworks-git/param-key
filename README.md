@@ -1,0 +1,90 @@
+# PARAM KEY
+
+**The physical remote for Home Assistant. If HA can control it, so can this.**
+
+<!-- hero: photo of the remote in hand, screen on. Then a 20-second clip: one press, something in the room reacts. -->
+![PARAM KEY](hardware/case/front.png)
+
+PARAM KEY has twenty real buttons and a screen, and it has no device database of its own. Home Assistant
+does the thinking, so it controls everything your HA already does: media, lights, climate, scenes,
+scripts. An IR blaster covers the gear HA can't reach.
+
+**[→ Join the beta list](FORM_LINK)** · [Demo video](VIDEO_LINK) · [Community thread](THREAD_LINK)
+
+## Why it's different
+
+- **HA is the device list.** Give an entity the label `remote` and it shows up on the remote. Remap a
+  key in HA, and it takes effect without a reflash.
+- **Hotkeys that follow context.** Four keys are labelled live on the screen: now playing, the
+  current room, the current mode.
+- **Local, no cloud.** It uses ESP-NOW to reach a bridge, which is any ~$10 ESP32 running ESPHome. The
+  remote never joins your Wi-Fi.
+- **Weeks per charge.** It sleeps on the table and wakes when you pick it up. About 3 weeks on a
+  1000 mAh cell, charged over USB-C.
+- **Learns IR.** It has an IR blaster plus an IR receiver, so it can copy codes from the remote it replaces.
+- **Yours to hack.** The ESPHome firmware and the HA integration are MIT.
+
+## Status
+
+| | |
+|---|---|
+| Remote v1 | In daily use |
+| Remote v2 (IR receiver, sturdier case) | In progress |
+| HACS integration ([param-key-homeassistant](https://github.com/paramworks-git/param-key-homeassistant)) | In progress: pairing and IR done; screens and menus next |
+| Room awareness | Next: one bridge per room, and the remote switches layout to the nearest one |
+
+## How it works
+
+```
+ PARAM KEY  ──ESP-NOW──▶  bridge (ESPHome)  ──API──▶  Home Assistant  ──▶  your devices
+    ▲                                                     │
+    └──────────── screen content, hotkey labels ──────────┘
+```
+
+The remote sends key presses (press, long press, repeat) and shows whatever HA sends back. All
+mapping lives in HA, so the firmware stays generic.
+
+| Inside | |
+|---|---|
+| MCU | ESP32-S3, ESPHome |
+| Screen | 2.0" 240×320 |
+| Keys | 20: power, 4 hotkeys, d-pad, back/home/settings, volume, media |
+| Radio | ESP-NOW to the bridge (two-way, acknowledged) |
+| IR | 940 nm blaster, 38 kHz receiver |
+| Power | LiPo, USB-C charging, accelerometer wake |
+
+## Set up
+
+You need Home Assistant 2026.10 or later with [HACS](https://hacs.xyz), a 2.4 GHz Wi-Fi network,
+and any ESP32 board for the bridge.
+
+1. **Bridge:** open the [installer](https://paramworks-git.github.io/param-key/) in Chrome or Edge,
+   plug the ESP32 into your computer, select **Install bridge** and enter your Wi-Fi.
+2. **Home Assistant:** in HACS, add `paramworks-git/param-key-homeassistant` as a custom repository
+   (type Integration), download **PARAM KEY**, and restart Home Assistant. Under Settings → Devices &
+   services → Discovered, add the ESPHome device `param-key-bridge-…`, then **PARAM KEY**.
+3. **Remote:** switch it on. It shows up as discovered too: add it, and check that the 6-digit code
+   in Home Assistant matches the one on its screen.
+
+Set your access point's 2.4 GHz channel to a fixed one (1, 6 or 11) rather than auto: the remote
+learns the bridge's channel when it pairs. Bridge updates show up in Home Assistant; remotes update
+over USB from the installer.
+
+## Repository
+
+| Path | What | Licence |
+|---|---|---|
+| [`firmware/`](firmware/) | ESPHome configs for the remote and the bridge; building, releasing, troubleshooting | MIT |
+| [`components/param_key/`](components/param_key/) | The ESPHome component they share: link, crypto, pairing, screen | MIT |
+| [`docs/`](docs/) | Radio protocol, test vectors | MIT |
+| [`site/`](site/) | The installer page (published with each release) | MIT |
+| [`hardware/`](hardware/) | Schematic, pinout, parts list, case models and renders, FEA | All rights reserved |
+
+The Home Assistant integration lives in its own repository,
+[param-key-homeassistant](https://github.com/paramworks-git/param-key-homeassistant), so HACS can
+install it. `hardware/` is generated from the private hardware sources and replaced on every export.
+
+## Get one
+
+A small beta batch is coming. **[Join the list](FORM_LINK)**: it takes your email and two questions.
+Issues and Discussions here are open for ideas and feedback.

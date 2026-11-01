@@ -1,0 +1,447 @@
+# PARAM KEY bridge: mains-powered ESP32 near the remote(s). Joins Wi-Fi and
+# the HA API, receives remote packets over ESP-NOW and turns them into HA events,
+# and forwards screen updates and IR codes from HA to the remotes. See
+# docs/protocol.md.
+#
+# Install it from the install page (https://paramworks-git.github.io/param-key/):
+# it flashes the build for your chip and asks for your Wi-Fi over USB. Home
+# Assistant then finds it, sets its encryption key, and offers firmware updates.
+# The PARAM KEY integration asks to let it send key presses to HA ("Allow the device
+# to perform Home Assistant actions").
+#
+# Only remotes paired in Home Assistant are heard: HA hands the bridge their keys
+# (set_remote) each time it connects. Until then the bridge accepts nothing but
+# pairing requests, which it reports to HA.
+
+substitutions:
+  name: param-key-bridge
+  friendly_name: PARAM KEY bridge
+  board: esp32dev
+  version: "0.2.0"
+  # Where the param_key component comes from. Builds from a checkout of this
+  # repository pass -s pk_component ../components (build.sh does).
+  pk_component: github://paramworks-git/param-key@v${version}
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  # Several bridges in one home: each gets the end of its MAC (param-key-bridge-a1b2c3).
+  name_add_mac_suffix: true
+  project:
+    name: paramworks.param-key-bridge
+    version: ${version}
+  on_boot:
+    # After ESP-NOW (-100) is up, so the MAC is final.
+    - priority: -150
+      then:
+        - lambda: esp_wifi_get_mac(WIFI_IF_STA, pk::bridge.own_mac);
+
+esp32:
+  board: ${board}
+  framework:
+    type: esp-idf
+
+external_components:
+  - source: ${pk_component}
+    components: [param_key]
+
+param_key:
+  role: bridge
+
+# "Take control" in ESPHome Builder imports this file as a package.
+dashboard_import:
+  package_import_url: github://paramworks-git/param-key/firmware/bridge.yaml@v${version}
+
+logger:
+
+# Wi-Fi is set over USB (Improv), from the install page. No fallback hotspot: an
+# unconfigured bridge doesn't open a network anyone nearby could join.
+wifi:
+  # ESP-NOW needs the radio awake to hear remotes.
+  power_save_mode: none
+
+improv_serial:
+
+# Updates come only from the release feed, through the update entity in HA: the
+# bridge has no port that accepts uploads. ("Take control" in ESPHome Builder can
+# add the esphome OTA platform with its own key.)
+ota:
+  - platform: http_request
+
+http_request:
+
+update:
+  - platform: http_request
+    name: Firmware
+    source: https://paramworks-git.github.io/param-key/firmware/bridge.manifest.json
+
+# The encryption key is set by Home Assistant when you add the bridge.
+api:
+  encryption: {}
+  actions:
+    - action: show_status
+      variables:
+        mode: string
+        title: string
+        subtitle: string
+        value: int
+        value_label: string
+      then:
+        - lambda: |-
+            pk::bridge.screen = pk::text_packet('S', {mode, title, subtitle, to_string(value), value_label});
+            id(send_to_remotes).execute(0);
+    - action: show_list
+      variables:
+        mode: string
+        title: string
+        cursor: int
+        items: string[]
+      then:
+        - lambda: |-
+            std::vector<std::string> fields{mode, title, to_string(cursor)};
+            for (size_t i = 0; i < items.size() && i < 6; i++)
+              fields.push_back(items[i]);
+            pk::bridge.screen = pk::text_packet('L', fields);
+            id(send_to_remotes).execute(0);
+    - action: set_hotkeys
+      variables:
+        labels: string[]
+      then:
+        - lambda: |-
+            std::vector<std::string> fields;
+            for (size_t i = 0; i < 4; i++)
+              fields.push_back(i < labels.size() ? labels[i] : "");
+            pk::bridge.hotkeys = pk::text_packet('B', fields);
+            id(send_to_remotes).execute(1);
+    - action: set_config
+      variables:
+        brightness: int
+        backlight_seconds: int
+        sleep_seconds: int
+      then:
+        - lambda: |-
+            pk::bridge.config = pk::text_packet('C', {to_string(brightness), to_string(backlight_seconds),
+                                                        to_string(sleep_seconds)});
+            id(send_to_remotes).execute(2);
+    - action: show_message
+      variables:
+        message: string
+        seconds: int
+      then:
+        - lambda: |-
+            auto packet = pk::text_packet('M', {message, to_string(seconds)});
+            for (auto &r : pk::bridge.remotes) {
+              auto frame = r.heard ? pk::bridge.seal_for(r, packet) : std::vector<uint8_t>{};
+              if (!frame.empty())
+                id(espnow_radio).send(r.mac.data(), frame);
+            }
+    # IR code for one remote to send (docs/protocol.md, packet I): carrier in Hz,
+    # timings in microseconds, positive = carrier on. The remote must be awake.
+    - action: send_ir
+      variables:
+        remote: string
+        carrier: int
+        timings: int[]
+      then:
+        - lambda: |-
+            uint8_t mac[6];
+            pk::Remote *r = pk::parse_mac(remote, mac) ? pk::bridge.find(mac) : nullptr;
+            if (r == nullptr) {
+              ESP_LOGW("param_key", "send_ir: remote %s isn't paired with this bridge", remote.c_str());
+              return;
+            }
+            std::vector<int32_t> us(timings.begin(), timings.end());
+            auto packet = pk::ir_packet(carrier < 0 ? 0 : carrier, us);
+            if (packet.empty()) {
+              ESP_LOGW("param_key", "send_ir: %u timings; between 1 and %u fit", (unsigned) us.size(),
+                       (unsigned) pk::MAX_IR_TIMINGS);
+              return;
+            }
+            auto frame = pk::bridge.seal_for(*r, packet);
+            if (!frame.empty())
+              id(espnow_radio).send(mac, frame);
+    # The bridge's send epoch (docs/protocol.md, "Security"): HA sends a new, higher
+    # one each time it connects, before the keys. Until then the bridge sends nothing.
+    - action: set_epoch
+      variables:
+        epoch: int
+      then:
+        - lambda: |-
+            if (epoch <= 0 || !pk::bridge.tx.start(static_cast<uint32_t>(epoch)))
+              ESP_LOGW("param_key", "set_epoch: %d refused (current %u)", epoch, (unsigned) pk::bridge.tx.epoch);
+    # Pairing (docs/protocol.md, "Pairing"). HA calls these. key: 32 hex digits;
+    # floor: the remote's lowest acceptable counter (one past the last HA saw).
+    - action: set_remote
+      variables:
+        remote: string
+        key: string
+        floor: int
+      then:
+        - lambda: |-
+            uint8_t mac[6], k[pk::crypto::KEY_LEN];
+            if (!pk::parse_mac(remote, mac) || !pk::parse_hex(key, k, sizeof(k))) {
+              ESP_LOGE("param_key", "set_remote: bad MAC or key");
+              return;
+            }
+            pk::bridge.provision(pk::to_mac(mac), k, floor < 0 ? 0u : static_cast<uint32_t>(floor));
+            pk::crypto::wipe(k, sizeof(k));
+            id(espnow_radio).add_peer(mac);
+            ESP_LOGI("param_key", "Remote %s paired", remote.c_str());
+    - action: forget_remote
+      variables:
+        remote: string
+      then:
+        - lambda: |-
+            uint8_t mac[6];
+            if (pk::parse_mac(remote, mac) && pk::bridge.forget(mac)) {
+              id(espnow_radio).del_peer(mac);
+              ESP_LOGI("param_key", "Remote %s forgotten", remote.c_str());
+            }
+    # HA's public key for a remote that asked to pair (event pair_request). Sent
+    # when that remote next asks with the same public key, within 5 minutes.
+    - action: pair_reply
+      variables:
+        remote: string
+        remote_public: string
+        ha_public: string
+      then:
+        - lambda: |-
+            pk::PendingPair p;
+            uint8_t mac[6];
+            if (!pk::parse_mac(remote, mac) || !pk::parse_hex(remote_public, p.remote_pub, pk::crypto::PUB_LEN) ||
+                !pk::parse_hex(ha_public, p.ha_pub, pk::crypto::PUB_LEN)) {
+              ESP_LOGE("param_key", "pair_reply: bad MAC or key");
+              return;
+            }
+            p.mac = pk::to_mac(mac);
+            p.until = millis() + pk::PAIR_REPLY_MS;
+            pk::bridge.drop_pending(mac);
+            pk::bridge.pending.push_back(p);
+
+espnow:
+  id: espnow_radio
+  # Room for IR codes (ESP-NOW v2 frames).
+  max_payload_size: 1470
+  # Peers are added only for paired remotes (set_remote) and for a pairing reply,
+  # so strangers can't fill the peer table. Their frames reach on_unknown_peer,
+  # which takes nothing but pairing requests.
+  auto_add_peer: false
+  on_unknown_peer:
+    - then:
+        - lambda: |-
+            if (pk::packet_type(data, size) == 'P' && size >= 3 + pk::crypto::PUB_LEN)
+              id(pair_request).execute(pk::format_mac(info.src_addr), pk::to_hex(data + 3, pk::crypto::PUB_LEN),
+                                       std::string(reinterpret_cast<const char *>(data + 35), size - 35),
+                                       info.rx_ctrl != nullptr ? info.rx_ctrl->rssi : 0);
+  # A paired remote pairing again broadcasts from a known peer.
+  on_broadcast:
+    - then:
+        - lambda: |-
+            if (pk::packet_type(data, size) == 'P' && size >= 3 + pk::crypto::PUB_LEN)
+              id(pair_request).execute(pk::format_mac(info.src_addr), pk::to_hex(data + 3, pk::crypto::PUB_LEN),
+                                       std::string(reinterpret_cast<const char *>(data + 35), size - 35),
+                                       info.rx_ctrl != nullptr ? info.rx_ctrl->rssi : 0);
+  on_receive:
+    - then:
+        - lambda: |-
+            pk::Remote *remote = pk::bridge.find(info.src_addr);
+            if (remote == nullptr)
+              return;  // a peer whose pairing hasn't finished
+            uint64_t seq;
+            std::vector<uint8_t> plain;
+            if (!pk::bridge.open(*remote, data, size, seq, plain)) {
+              ESP_LOGV("param_key", "Dropped a frame from %s: not authentic, or replayed",
+                       pk::format_mac(info.src_addr).c_str());
+              return;
+            }
+            const uint8_t *d = plain.data();
+            size_t n = plain.size();
+            char type = static_cast<char>(d[2]);
+            std::string mac = pk::format_mac(info.src_addr);
+            int rssi = info.rx_ctrl != nullptr ? info.rx_ctrl->rssi : 0;
+            // Remotes send under epoch 0: the sequence is their counter.
+            int counter = static_cast<int>(seq & 0x7FFFFFFF);
+            if (type == 'K' && n >= 6) {
+              std::string key(reinterpret_cast<const char *>(d + 5), n - 5);
+              id(fire_key).execute(mac, key, pk::event_name(d[4]), rssi, counter);
+            } else if (type == 'H' && n >= 5) {
+              // Answer from the cache, so the screen is right at once, then
+              // acknowledge (the remote's sign that the bridge has its key).
+              for (const auto *p : {&pk::bridge.screen, &pk::bridge.hotkeys, &pk::bridge.config}) {
+                auto frame = p->empty() ? std::vector<uint8_t>{} : pk::bridge.seal_for(*remote, *p);
+                if (!frame.empty())
+                  id(espnow_radio).send(info.src_addr, frame);
+              }
+              auto ack = pk::bridge.seal_for(*remote, pk::header('Y'));
+              if (!ack.empty())
+                id(espnow_radio).send(info.src_addr, ack);
+              // Flags bit 1: wake cause, EXT1 mask (LE) and board diagnostics follow.
+              size_t fw_at = 5;
+              std::string wake, wake_mask;
+              int diag = -1;
+              if ((d[4] & 2) && n >= 11) {
+                wake = pk::wake_name(d[5]);
+                wake_mask = str_sprintf("0x%06X", static_cast<unsigned>(pk::crypto::get_le32(d + 6)));
+                diag = d[10];
+                fw_at = 11;
+              }
+              std::string fw(reinterpret_cast<const char *>(d + fw_at), n - fw_at);
+              id(fire_hello).execute(mac, d[3] == 255 ? -1 : d[3], (d[4] & 1) != 0, fw, rssi, wake, wake_mask, diag,
+                                     counter);
+            }
+
+# Home Assistant offline (restart, update, network): after 5 s without HA's
+# connection, show it on the remotes instead of a screen that silently stops
+# responding. Only HA's state subscription counts, not e.g. a log viewer.
+globals:
+  # Starts true so the first connection after boot also asks HA to resend the
+  # screen, settings and remote keys the bridge just lost.
+  - id: ha_offline
+    type: bool
+    initial_value: "true"
+  - id: ha_down_seconds
+    type: int
+    initial_value: "0"
+
+interval:
+  - interval: 1s
+    then:
+      - if:
+          condition:
+            api.connected:
+              state_subscription_only: true
+          then:
+            - lambda: id(ha_down_seconds) = 0;
+            - if:
+                condition:
+                  lambda: return id(ha_offline);
+                then:
+                  - lambda: id(ha_offline) = false;
+                  # Ask HA to redraw and send the keys; give it a moment to finish subscribing.
+                  - delay: 2s
+                  - homeassistant.event:
+                      event: esphome.param_key_bridge_online
+                      data:
+                        bridge: !lambda return App.get_name();
+          else:
+            - lambda: |-
+                if (id(ha_offline) || ++id(ha_down_seconds) < 5)
+                  return;
+                id(ha_offline) = true;
+                pk::bridge.screen = pk::text_packet('S', {"Offline", "Home Assistant offline",
+                                                            "Keys work again once it's back", "-1", ""});
+                pk::bridge.hotkeys = pk::text_packet('B', {"", "", "", ""});
+                id(send_to_remotes).execute(0);
+                id(send_to_remotes).execute(1);
+
+script:
+  # which: 0 = screen packet, 1 = hotkey packet, 2 = config packet
+  - id: send_to_remotes
+    mode: queued
+    parameters:
+      which: int
+    then:
+      - lambda: |-
+          const auto &packet = which == 0 ? pk::bridge.screen : which == 1 ? pk::bridge.hotkeys : pk::bridge.config;
+          for (auto &r : pk::bridge.remotes) {
+            auto frame = r.heard ? pk::bridge.seal_for(r, packet) : std::vector<uint8_t>{};
+            if (!frame.empty())
+              id(espnow_radio).send(r.mac.data(), frame);
+          }
+  # A remote asking to pair: answer it if HA has replied (pair_reply), and
+  # tell HA about it (at most every 5 s per remote).
+  - id: pair_request
+    mode: queued
+    parameters:
+      remote: string
+      public_key: string
+      firmware: string
+      rssi: int
+    then:
+      - lambda: |-
+          uint8_t mac[6], pub[pk::crypto::PUB_LEN];
+          if (!pk::parse_mac(remote, mac) || !pk::parse_hex(public_key, pub, sizeof(pub)))
+            return;
+          uint32_t now = millis();
+          if (const pk::PendingPair *p = pk::bridge.pending_for(mac, pub, now)) {
+            auto answer = pk::header('A');
+            answer.insert(answer.end(), p->ha_pub, p->ha_pub + pk::crypto::PUB_LEN);
+            id(espnow_radio).add_peer(mac);
+            id(espnow_radio).send(mac, answer);
+          }
+          if (pk::bridge.should_report_pairing(mac, now))
+            id(fire_pair_request).execute(remote, public_key, firmware, rssi);
+  - id: fire_pair_request
+    mode: queued
+    max_runs: 10
+    parameters:
+      remote: string
+      public_key: string
+      firmware: string
+      rssi: int
+    then:
+      - homeassistant.event:
+          event: esphome.param_key_pair_request
+          data:
+            bridge: !lambda return App.get_name();
+            remote: !lambda return remote;
+            public_key: !lambda return public_key;
+            firmware: !lambda return firmware;
+            rssi: !lambda return rssi;
+  - id: fire_key
+    mode: queued
+    max_runs: 20
+    parameters:
+      remote: string
+      key: string
+      type: string
+      rssi: int
+      counter: int
+    then:
+      - homeassistant.event:
+          event: esphome.param_key_key
+          data:
+            bridge: !lambda return App.get_name();
+            remote: !lambda return remote;
+            key: !lambda return key;
+            type: !lambda return type;
+            rssi: !lambda return rssi;
+            counter: !lambda return counter;
+  - id: fire_hello
+    mode: queued
+    parameters:
+      remote: string
+      battery: int
+      charging: bool
+      firmware: string
+      rssi: int
+      wake: string
+      wake_mask: string
+      diag: int
+      counter: int
+    then:
+      - homeassistant.event:
+          event: esphome.param_key_hello
+          data:
+            bridge: !lambda return App.get_name();
+            remote: !lambda return remote;
+            battery: !lambda return battery;
+            charging: !lambda 'return charging ? "true" : "false";'
+            firmware: !lambda return firmware;
+            rssi: !lambda return rssi;
+            wake: !lambda return wake;
+            wake_mask: !lambda return wake_mask;
+            diag: !lambda return diag;
+            counter: !lambda return counter;
+
+text_sensor:
+  - platform: wifi_info
+    mac_address:
+      name: MAC address
+      entity_category: diagnostic
+
+sensor:
+  - platform: wifi_signal
+    name: Wi-Fi signal
+    entity_category: diagnostic
+    update_interval: 60s

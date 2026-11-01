@@ -1,0 +1,53 @@
+# Tests and firmware images from this checkout. Called by ci.yml and release.yml.
+name: Build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    name: Crypto and IR codec tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - run: HOST_DIR="$GITHUB_WORKSPACE" ./firmware/tests/run.sh
+
+  firmware:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {target: bridge-esp32, config: bridge.yaml, board: esp32dev}
+          - {target: bridge-esp32-s3, config: bridge.yaml, board: esp32-s3-devkitc-1}
+          - {target: bridge-esp32-c3, config: bridge.yaml, board: esp32-c3-devkitm-1}
+          - {target: remote-v1, config: remote-v1.yaml, board: ""}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+      - name: Compile
+        env:
+          BOARD: ${{ matrix.board }}
+          CONFIG: ${{ matrix.config }}
+        run: |
+          set -- compile "$CONFIG"
+          [ -n "$BOARD" ] && set -- -s board "$BOARD" "$@"
+          HOST_DIR="$GITHUB_WORKSPACE" ./firmware/build.sh "$@"
+      - name: Collect images
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          dir=$(dirname "$(ls firmware/.esphome/build/*/build/firmware.factory.bin)")
+          mkdir out
+          cp "$dir/firmware.factory.bin" "out/$TARGET.factory.bin"
+          cp "$dir/firmware.ota.bin" "out/$TARGET.ota.bin"
+          ls -l out
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
+        with:
+          name: ${{ matrix.target }}
+          path: out/
+          if-no-files-found: error
+          retention-days: 14
