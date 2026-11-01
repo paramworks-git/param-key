@@ -1,0 +1,8 @@
+Copyright (c) 2026 Nirvaan LLC d/b/a Paramworks. All rights reserved.
+
+This folder documents the PARAM KEY hardware: the schematic, pinout, parts list, case models,
+renders and analyses. You may view and download them, and print the case parts for your own
+personal, non-commercial use with a PARAM KEY board. No other licence is granted: they may not be
+copied, modified, redistributed or used to manufacture boards or cases without written permission.
+
+The rest of this repository (firmware and docs) is MIT licensed: see ../LICENSE.
