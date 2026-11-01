@@ -22,11 +22,16 @@ scripts. An IR blaster covers the gear HA can't reach.
   key in HA, and it takes effect without a reflash.
 - **Hotkeys that follow context.** Four keys are labelled live on the screen: now playing, the
   current room, the current mode.
-- **Local, no cloud.** It uses ESP-NOW to reach a bridge, which is any ~$10 ESP32 running ESPHome. The
-  remote never joins your Wi-Fi.
-- **Weeks per charge.** It sleeps on the table and wakes when you pick it up. 2–3 weeks on a
-  1000 mAh cell, charged over USB-C.
-- **Learns IR.** It has an IR blaster plus an IR receiver, so it can copy codes from the remote it replaces.
+- **Local, no cloud.** It uses ESP-NOW to reach a bridge, which is any ~$10 ESP32, flashed from your
+  browser. The remote never joins your Wi-Fi.
+- **Secure by default.** Every key press is encrypted and authenticated with the remote's own key,
+  and a recorded press can't be played back. Pairing shows the same 6-digit code on the remote and
+  in Home Assistant.
+- **Weeks per charge.** It sleeps on the table and wakes when you pick it up: 2–3 weeks on a
+  1000 mAh cell, charged over USB-C. Its battery level reaches HA on every wake.
+- **IR for the rest.** A blaster for gear HA can't reach, sending codes from Home Assistant's own IR
+  library, so HA's IR integrations can use it too. v2 adds a receiver to learn codes from the remote
+  it replaces.
 - **Yours to hack.** The ESPHome firmware and the HA integration are MIT.
 
 ## Status
@@ -34,8 +39,9 @@ scripts. An IR blaster covers the gear HA can't reach.
 | | |
 |---|---|
 | Remote v1 | In daily use |
-| Remote v2 (IR receiver, sturdier case) | In progress |
-| HACS integration ([param-key-homeassistant](https://github.com/paramworks-git/param-key-homeassistant)) | In progress: pairing and IR done; screens and menus next |
+| Remote v2 | Boards in fab: fuel gauge, IR receiver, proper charge termination, sturdier case (FEA-checked). Its firmware follows the boards |
+| HACS integration ([param-key-homeassistant](https://github.com/paramworks-git/param-key-homeassistant)) | In progress: bridges, pairing and IR done; screens, menus and battery sensors next |
+| IR learning | With v2: the receiver is on the board, the learning software comes next |
 | Room awareness | Next: one bridge per room, and the remote switches layout to the nearest one |
 
 ## How it works
@@ -49,14 +55,18 @@ scripts. An IR blaster covers the gear HA can't reach.
 The remote sends key presses (press, long press, repeat) and shows whatever HA sends back. All
 mapping lives in HA, so the firmware stays generic.
 
-| Inside | |
-|---|---|
-| MCU | ESP32-S3, ESPHome |
-| Screen | 2.0" 240×320 |
-| Keys | 20: power, 4 hotkeys, d-pad, back/home/settings, volume, media |
-| Radio | ESP-NOW to the bridge (two-way, acknowledged) |
-| IR | 940 nm blaster, 38 kHz receiver |
-| Power | LiPo, USB-C charging, accelerometer wake |
+| Inside | v1 | v2 |
+|---|---|---|
+| MCU | ESP32-S3, ESPHome | same |
+| Screen | 2.0" 240×320 | same |
+| Keys | 20: power, 4 hotkeys, d-pad, back/home/settings, volume, media | same |
+| Radio | ESP-NOW to the bridge: two-way, acknowledged, encrypted | same |
+| IR | 940 nm blaster | blaster, plus a 38 kHz receiver for learning codes |
+| Battery level | Estimated from the cell voltage (within about 5 %) | MAX17048 fuel gauge |
+| Charging | LiPo over USB-C | LiPo over USB-C, with load sharing, so charging finishes properly and HA sees when USB is plugged in |
+| Wake | Any key, or picking it up (accelerometer) | same |
+
+`hardware/` has v2's schematic, pinout, parts list and case models.
 
 ## Set up
 
