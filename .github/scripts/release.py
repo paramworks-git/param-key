@@ -59,7 +59,6 @@ def site(tag: str, images: Path, out: Path) -> None:
     bridge = {
         "name": "PARAM KEY bridge",
         "version": version,
-        "home_assistant_domain": "esphome",
         "new_install_prompt_erase": True,
         "builds": [
             {

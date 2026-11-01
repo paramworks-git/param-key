@@ -71,13 +71,13 @@
   <section class="card" id="bridge">
     <h2>Bridge</h2>
     <p class="sub">Any ESP32 board: ESP32, ESP32-S3 or ESP32-C3. Give it a USB power supply near where you use
-      the remote, and use it only as a bridge (not also as a Bluetooth proxy).</p>
+      the remote, and use it only as a bridge (not also as a Bluetooth proxy). Put it on a Wi-Fi network
+      that Home Assistant can reach and that has internet access (for updates).</p>
     <ol>
       <li>Plug the board into this computer and select <strong>Install</strong>, then pick its port.</li>
       <li>When asked, choose your Wi-Fi network and enter its password.</li>
       <li>In Home Assistant, open <strong>Settings → Devices &amp; services</strong>. Under Discovered, add the
-        ESPHome device <code>param-key-bridge-…</code>, then <strong>PARAM KEY</strong>, which asks to let the
-        bridge send key presses to Home Assistant.</li>
+        ESPHome device <code>param-key-bridge-…</code>, then <strong>PARAM KEY</strong>.</li>
     </ol>
     <esp-web-install-button manifest="firmware/bridge.manifest.json">
       <button slot="activate">Install bridge</button>

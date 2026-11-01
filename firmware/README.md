@@ -102,9 +102,8 @@ acknowledge its hello. In this order:
    again.
 
 **Keys do nothing.** Developer tools → Events → listen to `esphome.param_key_key` and press keys.
-Events arrive: the radio works, look at the HA side. None arrive: check that the bridge has
-**Allow the device to perform Home Assistant actions** turned on (the PARAM KEY integration asks
-for it when it finds the bridge).
+Events arrive: the radio works, look at the HA side. None arrive: check that the bridge is added
+as an ESPHome device and connected (its ESPHome page shows it online).
 
 **HA never shows the remote as discovered.** Listen to `esphome.param_key_pair_request` while the
 remote says "Pair with Home Assistant". No events: the bridge doesn't hear it (distance, or the

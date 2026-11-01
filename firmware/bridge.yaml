@@ -6,8 +6,8 @@
 # Install it from the install page (https://paramworks-git.github.io/param-key/):
 # it flashes the build for your chip and asks for your Wi-Fi over USB. Home
 # Assistant then finds it, sets its encryption key, and offers firmware updates.
-# The PARAM KEY integration asks to let it send key presses to HA ("Allow the device
-# to perform Home Assistant actions").
+# It only fires events, so ESPHome's "Allow the device to perform Home Assistant
+# actions" stays off.
 #
 # Only remotes paired in Home Assistant are heard: HA hands the bridge their keys
 # (set_remote) each time it connects. Until then the bridge accepts nothing but

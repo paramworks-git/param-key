@@ -153,9 +153,9 @@ every step, and `firmware/tests` checks the firmware against it.
 
 ## Bridge ⇄ Home Assistant
 
-The bridge is an ordinary ESPHome device. In HA, under the device's ESPHome
-settings, **"Allow the device to perform Home Assistant actions"** must be turned on
-so the bridge can fire events.
+The bridge is an ordinary ESPHome device. It only fires events (`esphome.*`), which
+HA accepts from any added ESPHome device, so "Allow the device to perform Home
+Assistant actions" stays off.
 
 Events fired by the bridge (only for authentic frames from paired remotes, apart
 from the pairing request). Each also has `bridge`, the bridge's ESPHome node name:
