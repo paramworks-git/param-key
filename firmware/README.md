@@ -81,7 +81,7 @@ ota:
     password: !secret ota_password
 ```
 
-Install that once over USB (or let the update entity install it); after that, Builder uploads
+Install that once over USB from Builder; after that, Builder uploads
 wirelessly.
 
 ## Release
