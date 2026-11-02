@@ -17,7 +17,7 @@ substitutions:
   name: param-key-bridge
   friendly_name: PARAM KEY bridge
   board: esp32dev
-  version: "0.3.0"
+  version: "0.3.1"
   # Where the param_key component comes from. Builds from a checkout of this
   # repository pass -s pk_component ../components (build.sh does).
   pk_component: github://paramworks-git/param-key@v${version}
@@ -69,6 +69,10 @@ ota:
   - platform: http_request
 
 http_request:
+  # OTA reads the image 256 bytes at a time, slower than the network sends it: the
+  # TCP window fills and the server's probes back off, so reads can stall for
+  # seconds. The 4.5 s default aborts updates part way; 30 s rides it out.
+  timeout: 30s
 
 update:
   - platform: http_request
