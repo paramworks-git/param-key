@@ -73,7 +73,16 @@ pressing reset or plugging in USB, and replug it after flashing.
 **Your own bridge config.** In ESPHome Builder, a bridge from the install page offers **Take
 control**: it imports `bridge.yaml` from the release as a package and adds an encryption key.
 Released bridges accept updates only from the release feed (HA's update entity), not over the
-network; add `ota: - platform: esphome` with a password to your config to upload your own builds.
+network. To upload your own builds wirelessly from Builder, add to your config:
+
+```yaml
+ota:
+  - platform: esphome
+    password: !secret ota_password
+```
+
+Install that once over USB (or let the update entity install it); after that, Builder uploads
+wirelessly.
 
 ## Release
 
