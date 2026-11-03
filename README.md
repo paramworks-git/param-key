@@ -14,7 +14,7 @@ PARAM KEY has twenty real buttons and a screen, and it has no device database of
 does the thinking, so it controls everything your HA already does: media, lights, climate, scenes,
 scripts. An IR blaster covers the gear HA can't reach.
 
-**[→ Join the beta list](https://tally.so/r/Arzd60)** · [Discuss on the Home Assistant forum](https://community.home-assistant.io/t/param-key-an-esphome-physical-remote-for-home-assistant-with-real-buttons-screen-and-an-ir-for-devices-ha-cannot-control/1031837)
+**[→ Join the beta list](https://paramworks.com)** · [Discuss on the Home Assistant forum](https://community.home-assistant.io/t/param-key-a-smart-universal-remote-for-home-assistant-esphome-physical-buttons-screen-ir/1031837)
 
 ## Why it's different
 
@@ -101,5 +101,5 @@ install it. `hardware/` is generated from the private hardware sources and repla
 
 ## Get one
 
-A small beta batch is coming. **[Join the list](https://tally.so/r/Arzd60)**: it takes your email and two questions.
-Questions and ideas: the [forum thread](https://community.home-assistant.io/t/param-key-an-esphome-physical-remote-for-home-assistant-with-real-buttons-screen-and-an-ir-for-devices-ha-cannot-control/1031837), or Issues and Discussions here.
+A small beta batch is coming. **[Join the list](https://paramworks.com)**: it only takes your email.
+Questions and ideas: the [forum thread](https://community.home-assistant.io/t/param-key-a-smart-universal-remote-for-home-assistant-esphome-physical-buttons-screen-ir/1031837), or Issues and Discussions here.
