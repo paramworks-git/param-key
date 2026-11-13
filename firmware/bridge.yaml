@@ -17,7 +17,7 @@ substitutions:
   name: param-key-bridge
   friendly_name: PARAM KEY bridge
   board: esp32dev
-  version: "0.3.1"
+  version: "0.3.2"
   # Where the param_key component comes from. Builds from a checkout of this
   # repository pass -s pk_component ../components (build.sh does).
   pk_component: github://paramworks-git/param-key@v${version}
@@ -82,6 +82,9 @@ update:
 # The encryption key is set by Home Assistant when you add the bridge.
 api:
   encryption: {}
+  # Restart after 5 min without HA (ESPHome's default is 15): a bridge that loses HA and
+  # can't get it back recovers by itself. HA sends the keys again on each connect.
+  reboot_timeout: 5min
   actions:
     # Screens, hotkeys and settings, cached for hellos, and messages. Each has a
     # *_for twin taking a remote's MAC, for HA to give every remote its own screen;
@@ -345,6 +348,10 @@ globals:
   - id: ha_down_seconds
     type: int
     initial_value: "0"
+  # Times HA went away since boot (the Home Assistant drops sensor).
+  - id: ha_drops
+    type: int
+    initial_value: "0"
 
 interval:
   - interval: 1s
@@ -371,6 +378,7 @@ interval:
                 if (id(ha_offline) || ++id(ha_down_seconds) < 5)
                   return;
                 id(ha_offline) = true;
+                id(ha_drops) += 1;
                 pk::bridge.set_ui("", pk::UI_SCREEN, pk::status_packet("Offline", "Home Assistant offline",
                                                                        "Keys work again once it's back", -1, ""));
                 pk::bridge.set_ui("", pk::UI_HOTKEYS, pk::hotkeys_packet({}));
@@ -500,10 +508,26 @@ script:
             diag: !lambda return diag;
             counter: !lambda return counter;
 
+# Diagnostics: free memory, uptime, why it last restarted, which access point and
+# channel it is on, and how often it lost HA. They tell a leak, a crash and a Wi-Fi
+# problem apart.
+debug:
+  update_interval: 60s
+
 text_sensor:
   - platform: wifi_info
     mac_address:
       name: MAC address
+      entity_category: diagnostic
+    ip_address:
+      name: IP address
+      entity_category: diagnostic
+    bssid:
+      name: Access point
+      entity_category: diagnostic
+  - platform: debug
+    reset_reason:
+      name: Last restart reason
       entity_category: diagnostic
 
 sensor:
@@ -511,3 +535,39 @@ sensor:
     name: Wi-Fi signal
     entity_category: diagnostic
     update_interval: 60s
+  - platform: uptime
+    name: Uptime
+    type: seconds
+    entity_category: diagnostic
+    update_interval: 60s
+  - platform: debug
+    free:
+      name: Free memory
+      entity_category: diagnostic
+    block:
+      name: Largest free block
+      entity_category: diagnostic
+    min_free:
+      name: Lowest free memory
+      entity_category: diagnostic
+    loop_time:
+      name: Loop time
+      entity_category: diagnostic
+  - platform: template
+    name: Wi-Fi channel
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    update_interval: 60s
+    lambda: |-
+      uint8_t primary = 0;
+      wifi_second_chan_t second;
+      if (esp_wifi_get_channel(&primary, &second) != ESP_OK)
+        return {};
+      return primary;
+  - platform: template
+    name: Home Assistant drops
+    entity_category: diagnostic
+    accuracy_decimals: 0
+    state_class: total_increasing
+    update_interval: 60s
+    lambda: return id(ha_drops);

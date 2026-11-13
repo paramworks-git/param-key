@@ -15,7 +15,7 @@
 # param_key component), so nothing about the bridge is compiled in.
 
 substitutions:
-  version: "0.3.1"
+  version: "0.3.2"
   # Where the param_key component comes from. Builds from a checkout of this
   # repository pass -s pk_component ../components (build.sh does).
   pk_component: github://paramworks-git/param-key@v${version}
