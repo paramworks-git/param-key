@@ -5,7 +5,7 @@ ESP32-S3-MINI-1 GPIO assignments. GPIO0-21 can wake the remote from deep sleep.
 | GPIO | Function |
 |---|---|
 | 0 | key: home |
-| 1 | IR_RX |
+| 1 | VBUS_SENSE |
 | 2 | key: power |
 | 3 | key: ok |
 | 4 | key: up |
@@ -31,7 +31,7 @@ ESP32-S3-MINI-1 GPIO assignments. GPIO0-21 can wake the remote from deep sleep.
 | 34 | LCD_MOSI |
 | 35 | LCD_CS |
 | 36 | LCD_DC |
-| 37 | VBUS_SENSE |
+| 37 | IR_RX |
 | 38 | LCD_PWR_EN |
 | 39 | I2C_SDA |
 | 40 | I2C_SCL |
